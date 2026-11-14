@@ -7,6 +7,9 @@ class TokenType(Enum):
     TOKEN_METODO_HTTP = auto()
     TOKEN_RUTA = auto()
     TOKEN_ESTADO = auto()
+    TOKEN_PROTOCOLO = auto() 
+    TOKEN_GUION = auto()     
+    TOKEN_COMILLAS = auto()
     EOF = auto()      # Fin de archivo
     ERROR = auto()    # Símbolo no reconocido
 
@@ -69,6 +72,18 @@ class Lexer:
                 
             if self.caracter_actual.isdigit():
                 return self._leer_ip_o_estado()
+
+            # Transición directa estática: TOKEN_GUION
+            if self.caracter_actual == '-':
+                lin, col = self.linea, self.columna
+                self.avanzar()
+                return Token(TokenType.TOKEN_GUION, "-", lin, col)
+                
+            # Transición directa estática: TOKEN_COMILLAS
+            if self.caracter_actual == '"':
+                lin, col = self.linea, self.columna
+                self.avanzar()
+                return Token(TokenType.TOKEN_COMILLAS, '"', lin, col)
                 
             # Intercepción de carácter inválido aislado: agrupa todo hasta el espacio
             linea_err, col_err = self.linea, self.columna
@@ -150,8 +165,8 @@ class Lexer:
         linea_inicio = self.linea
         col_inicio = self.columna
         
-        # El AFD transita leyendo todo el bloque hasta chocar con un espacio (delimitador natural)
-        while self.caracter_actual is not None and not self.caracter_actual.isspace():
+        # El AFD transita leyendo todo el bloque hasta chocar con un espacio (delimitador natural) o comillas
+        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
             lexema += self.caracter_actual
             self.avanzar()
             
@@ -160,6 +175,8 @@ class Lexer:
         # Si lee "GET123", el lexema será "GET123", no existirá en el conjunto y lanzará Error.
         if lexema in metodos_validos:
             return Token(TokenType.TOKEN_METODO_HTTP, lexema, linea_inicio, col_inicio)
+        elif lexema.startswith("HTTP/"):
+            return Token(TokenType.TOKEN_PROTOCOLO, lexema, linea_inicio, col_inicio)
         else:
             return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
@@ -168,8 +185,8 @@ class Lexer:
         linea_inicio = self.linea
         col_inicio = self.columna
         
-        # El AFD consume caracteres iterativamente hasta chocar con un espacio o EOF
-        while self.caracter_actual is not None and not self.caracter_actual.isspace():
+        # El AFD consume caracteres iterativamente hasta chocar con un espacio, comillas o EOF
+        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
             lexema += self.caracter_actual
             self.avanzar()
             
@@ -183,6 +200,7 @@ class Lexer:
             lexema_parcial += self.caracter_actual
             self.avanzar()
         return lexema_parcial
+
 
 # Analizador sintáctico (Parser)
 class Parser:
@@ -230,11 +248,27 @@ class Parser:
     
     def parse_log_entry(self) -> list[Token]:
         tokens_entry = []
+        # 1. Dirección IP
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_IP))
+        # 2. Identidad remota (suele ser un guion)
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_GUION))
+        # 3. Usuario autenticado (suele ser un guion)
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_GUION))
+        # 4. Marca de tiempo
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_FECHA))
+        # 5. Comillas de apertura de la petición
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_COMILLAS))
+        # 6. Verbo HTTP
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_METODO_HTTP))
+        # 7. Recurso solicitado (URI)
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_RUTA))
+        # 8. Versión del protocolo
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_PROTOCOLO))
+        # 9. Comillas de cierre de la petición
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_COMILLAS))
+        # 10. Código de respuesta
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_ESTADO))
+        
         return tokens_entry
 
 # Analizador semántico
@@ -243,12 +277,15 @@ class SemanticAnalyzer:
         """
         Recibe una secuencia sintácticamente válida (garantizada por la GLC)
         y aplica las restricciones del dominio de negocio.
-        Orden posicional garantizado: [IP, FECHA, METODO, RUTA, ESTADO]
+        Nuevo orden: [IP, -, -, FECHA, ", METODO, RUTA, PROTOCOLO, ", ESTADO]
         """
         token_ip = tokens[0]
-        token_fecha = tokens[1]
-        token_ruta = tokens[3]
-        token_estado = tokens[4]
+        # tokens[1] y [2] son los guiones de identidad
+        token_fecha = tokens[3]
+        # tokens[4] son las comillas de apertura, [5] es el método HTTP
+        token_ruta = tokens[6]
+        # tokens[7] es el protocolo, [8] son las comillas de cierre
+        token_estado = tokens[9]
         
         self._validar_ip(token_ip)
         self._validar_fecha(token_fecha)
@@ -279,7 +316,6 @@ class SemanticAnalyzer:
             raise ValueError(f"Error Semántico (Ln {token.linea}): Código HTTP '{token.lexema}' no estandarizado por IANA.")
 
     def _validar_ruta(self, token: Token):
-        # Se elimina la lógica de seguridad operativa. 
         # Única validación semántica: Límite físico para prevención de buffer overflow.
         if len(token.lexema) > 2048:
             raise ValueError(f"Error Semántico (Ln {token.linea}): La URI supera el límite físico de 2048 caracteres.")
