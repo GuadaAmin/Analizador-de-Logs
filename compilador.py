@@ -43,17 +43,21 @@ class Lexer:
         else:
             self.caracter_actual = self.entrada[self.posicion]
 
-    def saltar_espacios(self):
-        """Consume los caracteres pertenecientes a Σ_espacio."""
+    def _saltar_delimitadores(self):
+        """Implementa la transición δ(q0, c ∈ Σ_espacio) = q0"""
         while self.caracter_actual is not None and self.caracter_actual.isspace():
             self.avanzar()
 
     def obtener_siguiente_token(self) -> Token:
         while self.caracter_actual is not None:
+            # Estado q0: Descarte de delimitadores (incluye espacios y saltos de línea \n)
             if self.caracter_actual.isspace():
-                self.saltar_espacios()
+                self._saltar_delimitadores()
                 continue
                 
+            # Bifurcación TOKEN_RUTA
+            if self.caracter_actual == '/':
+                return self._leer_ruta()
             if self.caracter_actual == '[':
                 return self._leer_fecha()
                 
@@ -114,17 +118,18 @@ class Lexer:
             lexema += self.caracter_actual
             self.avanzar()
         
-        # Validación Léxica Estructural (reemplazo manual de la expresión regular)
-        # Formato esperado: [DD/Mes/AAAA:HH:MM:SS] -> Exactamente 22 caracteres
-        if len(lexema) == 22:
+        # Validación Léxica Estructural
+        # Formato esperado: [DD/Mes/AAAA:HH:MM:SS ±ZZZZ] -> Exactamente 28 caracteres
+        if len(lexema) == 28:
             # 1. Validar los símbolos estáticos en sus posiciones exactas del autómata
             if (lexema[0] == '[' and lexema[3] == '/' and lexema[7] == '/' and 
                 lexema[12] == ':' and lexema[15] == ':' and lexema[18] == ':' and 
-                lexema[21] == ']'):
+                lexema[21] == ' ' and lexema[22] in ('+', '-') and lexema[27] == ']'):
                 
-                # 2. Extraer los bloques que varían
+                # 2. Extraer los bloques numéricos que varían (incluyendo el huso horario final)
                 bloque_digitos = (lexema[1:3] + lexema[8:12] + 
-                                  lexema[13:15] + lexema[16:18] + lexema[19:21])
+                                  lexema[13:15] + lexema[16:18] + 
+                                  lexema[19:21] + lexema[23:27])
                 mes = lexema[4:7]
                 
                 # 3. Verificar que los tipos de caracteres coincidan (\d y [A-Z][a-z]{2})
@@ -133,11 +138,11 @@ class Lexer:
                     mes[0].isupper() and 
                     mes[1:].islower()):
                     
-                    # Léxicamente válido. Si la fecha es "32/Feb/2026", pasará por aquí
-                    # y será rechazada más adelante por el Analizador Semántico.
+                    # Léxicamente válido. Los chequeos lógicos (ej. mes válido, horas reales) 
+                    # ocurrirán en el Analizador Semántico.
                     return Token(TokenType.TOKEN_FECHA, lexema, linea_inicio, col_inicio)
                     
-        # Si no tiene 22 caracteres, o le faltan las barras/puntos, es un Error Léxico
+        # Si no tiene 28 caracteres, o le faltan símbolos fijos, es un Error Léxico
         return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
     def _leer_metodo(self) -> Token:
@@ -150,8 +155,8 @@ class Lexer:
             lexema += self.caracter_actual
             self.avanzar()
             
-        metodos_validos = {"GET", "POST", "PUT", "DELETE", "HEAD"}
-        
+        metodos_validos = {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "TRACE", "CONNECT"}
+
         # Si lee "GET123", el lexema será "GET123", no existirá en el conjunto y lanzará Error.
         if lexema in metodos_validos:
             return Token(TokenType.TOKEN_METODO_HTTP, lexema, linea_inicio, col_inicio)
@@ -207,6 +212,22 @@ class Parser:
         else:
             self._error_sintactico(tipo_esperado)
 
+    def parse_log_file(self) -> list[list[Token]]:
+        """
+        Implementa la regla: <LogFile> ::= <LogEntry> <LogFile> | ε
+        """
+        entradas = []
+        
+        # Derivación a ε: Si el token actual es EOF de inmediato, el archivo está vacío.
+        if self.token_actual.tipo == TokenType.EOF:
+            return entradas
+            
+        # Derivación recursiva/iterativa: <LogEntry> <LogFile>
+        while self.token_actual.tipo != TokenType.EOF:
+            entradas.append(self.parse_log_entry())
+            
+        return entradas
+    
     def parse_log_entry(self) -> list[Token]:
         tokens_entry = []
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_IP))
@@ -238,74 +259,94 @@ class SemanticAnalyzer:
     def _validar_ip(self, token: Token):
         octetos = token.lexema.split('.')
         for octeto in octetos:
+            # Validación 1: Prevención de ambigüedad octal (ceros a la izquierda)
+            if len(octeto) > 1 and octeto[0] == '0':
+                raise ValueError(f"Error Semántico (Ln {token.linea}): El octeto '{octeto}' en la IP '{token.lexema}' contiene ceros a la izquierda (notación inválida/octal).")
+                
+            # Validación 2: Límites físicos del byte
             if not (0 <= int(octeto) <= 255):
-                raise ValueError(
-                    f"Error Semántico (Ln {token.linea}): El octeto '{octeto}' de la IP '{token.lexema}' "
-                    f"está fuera del límite físico admitido (0-255)."
-                )
+                raise ValueError(f"Error Semántico (Ln {token.linea}): El octeto '{octeto}' de la IP '{token.lexema}' está fuera del límite (0-255).")
 
     def _validar_estado(self, token: Token):
-        if not (100 <= int(token.lexema) <= 599):
-            raise ValueError(
-                f"Error Semántico (Ln {token.linea}): El código de estado HTTP '{token.lexema}' "
-                f"no existe en el protocolo (rango válido 100-599)."
-            )
+        estados_estandar = {
+            100, 101, 102, 103,
+            200, 201, 202, 203, 204, 205, 206, 207, 208, 226,
+            300, 301, 302, 303, 304, 305, 306, 307, 308,
+            400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451,
+            500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511
+        }
+        if int(token.lexema) not in estados_estandar:
+            raise ValueError(f"Error Semántico (Ln {token.linea}): Código HTTP '{token.lexema}' no estandarizado por IANA.")
 
     def _validar_ruta(self, token: Token):
-        ruta = token.lexema
-        
-        # 1. Límite físico (Buffer Overflow)
-        if len(ruta) > 2048:
-            raise ValueError(
-                f"Error Semántico (Ln {token.linea}): La URI excede el límite de 2048 caracteres."
-            )
-            
-        # 2. Seguridad: Path Traversal (Evasión de directorios)
-        if "../" in ruta or "..\\" in ruta:
-            raise ValueError(
-                f"Error Semántico (Ln {token.linea}): Intento de evasión de directorio detectado en '{ruta}'."
-            )
-            
-        # 3. Seguridad: Exposición de información sensible
-        archivos_sensibles = [".env", ".git", ".htaccess", ".htpasswd"]
-        if any(sensible in ruta for sensible in archivos_sensibles):
-            raise ValueError(
-                f"Error Semántico (Ln {token.linea}): Intento de acceso a archivo de configuración del sistema en '{ruta}'."
-            )
-            
-        # 4. Inconsistencia de protocolo HTTP
-        if "#" in ruta:
-            raise ValueError(
-                f"Error Semántico (Ln {token.linea}): La URI contiene un fragmento ('#'), el cual no se transmite en peticiones estándar."
-            )
+        # Se elimina la lógica de seguridad operativa. 
+        # Única validación semántica: Límite físico para prevención de buffer overflow.
+        if len(token.lexema) > 2048:
+            raise ValueError(f"Error Semántico (Ln {token.linea}): La URI supera el límite físico de 2048 caracteres.")
 
     def _validar_fecha(self, token: Token):
-        dia = int(token.lexema[1:3])
-        mes_str = token.lexema[4:7]
-        anio = int(token.lexema[8:12])
-        horas, minutos, segundos = int(token.lexema[13:15]), int(token.lexema[16:18]), int(token.lexema[19:21])
+        lexema = token.lexema
+        linea = token.linea
         
-        if not (1990 <= anio <= 2026):
-            raise ValueError(f"Error Semántico (Ln {token.linea}): Año '{anio}' fuera de marco operativo.")
+        # 1. Extracción mediante slicing estático (posiciones garantizadas por el lexer)
+        try:
+            dia = int(lexema[1:3])
+            mes_str = lexema[4:7]
+            anio = int(lexema[8:12])
+            hora = int(lexema[13:15])
+            minuto = int(lexema[16:18])
+            segundo = int(lexema[19:21])
             
-        meses_dias = {"Jan": 31, "Feb": 28, "Mar": 31, "Apr": 30, "May": 31, "Jun": 30, 
-                      "Jul": 31, "Aug": 31, "Sep": 30, "Oct": 31, "Nov": 30, "Dec": 31}
+            signo_tz = lexema[22]
+            horas_tz = int(lexema[23:25])
+            mins_tz = int(lexema[25:27])
+        except ValueError:
+            raise ValueError(f"Error Semántico (Ln {linea}): Los componentes de la fecha no son numéricos.")
+
+        # 2. Validación por Lista Blanca de Meses en Inglés (Estándar Apache)
+        meses_validos = {
+            "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+            "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
+        }
         
-        if mes_str not in meses_dias:
-            raise ValueError(f"Error Semántico (Ln {token.linea}): Mes '{mes_str}' inválido.")
+        if mes_str not in meses_validos:
+            raise ValueError(f"Error Semántico (Ln {linea}): Mes '{mes_str}' inexistente o en idioma incorrecto.")
             
-        max_dias = meses_dias[mes_str]
-        if mes_str == "Feb" and (anio % 4 == 0 and (anio % 100 != 0 or anio % 400 == 0)):
-            max_dias = 29
+        mes = meses_validos[mes_str]
+
+        # 3. Validación de Días y Años Bisiestos
+        dias_por_mes = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        
+        # Cálculo axiomático de bisiesto: divisible por 4, pero si es secular (múltiplo de 100) 
+        # debe ser divisible por 400.
+        es_bisiesto = (anio % 4 == 0 and anio % 100 != 0) or (anio % 400 == 0)
+        
+        if es_bisiesto:
+            dias_por_mes[2] = 29
+
+        if not (1 <= dia <= dias_por_mes[mes]):
+            raise ValueError(f"Error Semántico (Ln {linea}): Día {dia} fuera de límite calendario para {mes_str} {anio}.")
+
+        # 4. Validación de Hora Matemática (Reloj 24hs)
+        if not (0 <= hora <= 23):
+            raise ValueError(f"Error Semántico (Ln {linea}): Hora {hora} inválida.")
+        if not (0 <= minuto <= 59):
+            raise ValueError(f"Error Semántico (Ln {linea}): Minuto {minuto} inválido.")
+        if not (0 <= segundo <= 59):
+            raise ValueError(f"Error Semántico (Ln {linea}): Segundo {segundo} inválido.")
+
+        # 5. Validación de Desplazamiento Horario (Timezone)
+        if not (0 <= mins_tz <= 59):
+            raise ValueError(f"Error Semántico (Ln {linea}): Minutos de huso horario ({mins_tz}) fuera de rango.")
             
-        if not (1 <= dia <= max_dias):
-            if mes_str == "Feb" and dia == 29:
-                raise ValueError(f"Error Semántico (Ln {token.linea}): Día '29' inválido para el mes 'Feb' en el año {anio}.")
-            else:
-                raise ValueError(f"Error Semántico (Ln {token.linea}): Día '{dia}' inválido para el mes '{mes_str}'.")
+        # Convertir a minutos totales para evaluar límites planetarios asimétricos
+        offset_total_mins = (horas_tz * 60) + mins_tz
+        if signo_tz == '-':
+            offset_total_mins *= -1
             
-        if not (0 <= horas <= 23) or not (0 <= minutos <= 59) or not (0 <= segundos <= 59):
-            raise ValueError(f"Error Semántico (Ln {token.linea}): Estructura de reloj inválida.")
+        # Rango válido: desde UTC-12:00 (-720 minutos) hasta UTC+14:00 (+840 minutos)
+        if not (-720 <= offset_total_mins <= 840):
+            raise ValueError(f"Error Semántico (Ln {linea}): Desplazamiento {signo_tz}{horas_tz:02d}{mins_tz:02d} fuera de los límites terrestres permitidos (-1200 a +1400).")
 
 # Orquestrador principal (Compilador)
 class LogCompiler:
@@ -325,46 +366,49 @@ class LogCompiler:
 
 
 # ==========================================
-# BLOQUE DE PRUEBA Y EJECUCIÓN
+# BLOQUE DE PRUEBA Y EJECUCIÓN: Llamada a LogFile (archivo txt dentro de la misma carpeta)
 # ==========================================
-if __name__ == "__main__":
-    logs_prueba = [
-        # --- CASOS VÁLIDOS (Límites Físicos y Temporales Absolutos) ---
-        "0.0.0.0 [01/Jan/1990:00:00:00] GET / 100",                             # 1. OK: Límites mínimos
-        "255.255.255.255 [29/Feb/2024:23:59:59] DELETE /api/v1?id=9 599",       # 2. OK: Límites máximos, año bisiesto real y URI con parámetros
+import os
 
-        # --- ERRORES SEMÁNTICOS (Violación de Reglas de Negocio) ---
-        "192.168.1.1 [31/Apr/2026:13:45:01] GET /index.html 200",               # 3. Semántico: Abril tiene estrictamente 30 días
-        "192.168.1.1 [14/Oct/1989:13:45:01] GET /index.html 200",               # 4. Semántico: Año 1989 (fuera de la cota operativa inferior)
-        "192.168.1.1 [14/Oct/2026:24:00:00] GET /index.html 200",               # 5. Semántico: Reloj inválido (24:00:00)
-        "192.168.1.256 [14/Oct/2026:13:45:01] GET /index.html 200",             # 6. Semántico: Octeto IPv4 superior a 255 (desbordamiento)
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index.html 600",               # 7. Semántico: Estado HTTP superior a la especificación (600)
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index.html 099",               # 8. Semántico: Estado HTTP inferior a la especificación (099)
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /public/..\\private 200",       # 9. Semántico: Path Traversal empleando sintaxis Windows (..\)
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /var/www/.htaccess 403",        # 10. Semántico: Acceso a archivo crítico de configuración
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index.html#header 200",        # 11. Semántico: Inclusión de fragmento de resolución en cliente (#)
+def main():
+    # 1. Resolver la ruta absoluta del archivo en la misma carpeta que el script
+    directorio_actual = os.path.dirname(os.path.abspath(__file__))
+    nombre_archivo = "LogFile.txt" 
+    ruta_archivo = os.path.join(directorio_actual, nombre_archivo)
 
-        # --- ERRORES LÉXICOS (Violación Estructural o de Alfabeto) ---
-        "192.168.1.1 [14/Oct/2026:13:45:01] PATCH /index.html 200",             # 12. Léxico: Método HTTP excluido del lexicón finito
-        "192.168.1.1 [14/Oct/2026:13:45:01] get /index.html 200",               # 13. Léxico: Sensibilidad de mayúsculas (case-sensitive) en métodos
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index.html 20",                # 14. Léxico: Geometría de estado errónea (2 dígitos en lugar de 3)
-        "192.168.1.1 [14.Oct.2026:13:45:01] GET /index.html 200",               # 15. Léxico: Separadores posicionales inválidos dentro de la fecha
-        "192.168.1.1 14/Oct/2026:13:45:01 GET /index.html 200",                 # 16. Léxico: Fecha sin los corchetes delimitadores ('[', ']') obligatorios
-        "192.168.1.1.1 [14/Oct/2026:13:45:01] GET /index.html 200",             # 17. Léxico: IP con exceso de transiciones de delimitador (4 puntos)
+    # 2. Leer el contenido del archivo de texto
+    try:
+        with open(ruta_archivo, 'r', encoding='utf-8') as file:
+            contenido_log = file.read()
+    except FileNotFoundError:
+        print(f"Error Crítico: El archivo '{nombre_archivo}' no existe en {directorio_actual}.")
+        return
+    except PermissionError:
+        print(f"Error Crítico: Permisos insuficientes para leer '{nombre_archivo}'.")
+        return
 
-        # --- ERRORES SINTÁCTICOS (Violación de Reglas de Producción GLC) ---
-        "[14/Oct/2026:13:45:01] 192.168.1.1 GET /index.html 200",               # 18. Sintáctico: Inversión del orden de los nodos TOKEN_IP y TOKEN_FECHA
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index.html",                   # 19. Sintáctico: EOF prematuro por ausencia obligatoria de TOKEN_ESTADO
-        "192.168.1.1 [14/Oct/2026:13:45:01] GET /index /style.css 200"          # 20. Sintáctico: Duplicación consecutiva inesperada de TOKEN_RUTA
-    ]
+    # 3. Inicializar el pipeline del compilador
+    lexer = Lexer(contenido_log)
+    parser = Parser(lexer)
+    
+    # 4. Ejecutar el análisis
+    # 4. Ejecutar el análisis
+    try:
+        # Llamada al axioma principal que implementamos antes: <LogFile>
+        arbol_sintactico = parser.parse_log_file()
+        
+        # Instanciar y ejecutar el analizador semántico
+        semanticAnalyzer = SemanticAnalyzer()
+        
+        # Iterar sobre cada línea validada por el parser
+        for registro_tokens in arbol_sintactico:
+            semanticAnalyzer.analizar_log_entry(registro_tokens)
+        
+        print(f"Análisis exitoso. Se procesaron {len(arbol_sintactico)} registros válidos.")
+        
+    except Exception as e: 
+        # Captura las excepciones de Error Léxico, Sintáctico o Semántico
+        print(f"FALLO DE COMPILACIÓN:\n{e}")
 
-    for i, log in enumerate(logs_prueba, 1):
-        print(f"\n--- Probando Caso {i} ---")
-        print(f"Entrada: {log}")
-        try:
-            compilador = LogCompiler(log)
-            compilador.procesar()
-        except Exception as e:
-            print(e)
-            
-    input("\nPresiona Enter para salir...")
+if __name__ == '__main__':
+    main()
