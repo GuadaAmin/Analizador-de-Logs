@@ -184,16 +184,51 @@ class Lexer:
         lexema = ""
         linea_inicio = self.linea
         col_inicio = self.columna
+
+        # Conjunto estricto de caracteres válidos en una URI (RFC 3986)
+        # Incluye: alfanuméricos, unreserved (-._~), reserved (:/?#[]@!$&'()*+,;=) y percent (%)
+        caracteres_validos_uri = set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            "-._~:/?#[]@!$&'()*+,;=%"
+        )
+        hexadecimales = set("0123456789abcdefABCDEF")
         
-        # El AFD consume caracteres iterativamente hasta chocar con un espacio, comillas o EOF
         while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
-            lexema += self.caracter_actual
-            self.avanzar()
             
-        # Estructuralmente, si empezó con '/' y terminó en espacio, el léxico lo acepta.
-        # El límite de longitud (2048) se validará en la etapa semántica.
+            # Sub-autómata para Percent-Encoding (% seguido de 2 hex)
+            if self.caracter_actual == '%':
+                lexema += self.caracter_actual
+                self.avanzar()
+                
+                # Consumimos estrictamente los siguientes dos caracteres
+                for _ in range(2):
+                    if self.caracter_actual is not None and self.caracter_actual in hexadecimales:
+                        lexema += self.caracter_actual
+                        self.avanzar()
+                    else:
+                        # Falló la regla de los 2 hex (ej: %2G, %X). Rechazo inmediato.
+                        return self._consumir_ruta_error(lexema, linea_inicio, col_inicio)
+                
+                continue # El bloque %XX fue válido, seguimos con el while
+                
+            # Transición normal para caracteres permitidos
+            elif self.caracter_actual in caracteres_validos_uri:
+                lexema += self.caracter_actual
+                self.avanzar()
+                
+            # Símbolo ilegal (ej: comillas, llaves, espacios)
+            else:
+                return self._consumir_ruta_error(lexema, linea_inicio, col_inicio)
+            
         return Token(TokenType.TOKEN_RUTA, lexema, linea_inicio, col_inicio)
 
+    def _consumir_ruta_error(self, lexema_parcial: str, linea_inicio: int, col_inicio: int) -> Token:
+        """Sumidero: consume el resto de la URI corrupta para emitir el error completo."""
+        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
+            lexema_parcial += self.caracter_actual
+            self.avanzar()
+        return Token(TokenType.ERROR, lexema_parcial, linea_inicio, col_inicio)
+    
     def _consumir_hasta_espacio(self, lexema_parcial: str) -> str:
         """Consume y anexa caracteres hasta encontrar el delimitador de espacio o EOF."""
         while self.caracter_actual is not None and not self.caracter_actual.isspace():
@@ -284,12 +319,14 @@ class SemanticAnalyzer:
         token_fecha = tokens[3]
         # tokens[4] son las comillas de apertura, [5] es el método HTTP
         token_ruta = tokens[6]
+        token_protocolo = tokens[7]
         # tokens[7] es el protocolo, [8] son las comillas de cierre
         token_estado = tokens[9]
         
         self._validar_ip(token_ip)
         self._validar_fecha(token_fecha)
         self._validar_ruta(token_ruta)
+        self._validar_protocolo(token_protocolo)
         self._validar_estado(token_estado)
         # TOKEN_METODO_HTTP no requiere validación semántica adicional.
 
@@ -383,6 +420,11 @@ class SemanticAnalyzer:
         # Rango válido: desde UTC-12:00 (-720 minutos) hasta UTC+14:00 (+840 minutos)
         if not (-720 <= offset_total_mins <= 840):
             raise ValueError(f"Error Semántico (Ln {linea}): Desplazamiento {signo_tz}{horas_tz:02d}{mins_tz:02d} fuera de los límites terrestres permitidos (-1200 a +1400).")
+
+    def _validar_protocolo(self, token: Token):
+        protocolos_estandar = {"HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/2", "HTTP/3.0", "HTTP/3"}
+        if token.lexema not in protocolos_estandar:
+            raise ValueError(f"Error Semántico (Ln {token.linea}): Versión de protocolo '{token.lexema}' desconocida o no soportada.")
 
 # Orquestrador principal (Compilador)
 class LogCompiler:
