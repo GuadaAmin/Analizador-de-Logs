@@ -61,15 +61,20 @@ class Lexer:
             # Bifurcación TOKEN_RUTA
             if self.caracter_actual == '/':
                 return self._leer_ruta()
+                
+            # Bifurcación TOKEN_FECHA
             if self.caracter_actual == '[':
                 return self._leer_fecha()
                 
-            if self.caracter_actual == '/':
-                return self._leer_ruta()
+            # Bifurcación TOKEN_PROTOCOLO (Lookahead para desambiguar de HEAD)
+            if self.caracter_actual == 'H' and self.entrada.startswith("HTTP", self.posicion):
+                return self._leer_protocolo()
                 
+            # Bifurcación TOKEN_METODO_HTTP
             if self.caracter_actual.isalpha():
                 return self._leer_metodo()
                 
+            # Bifurcación TOKEN_IP / ESTADO
             if self.caracter_actual.isdigit():
                 return self._leer_ip_o_estado()
 
@@ -175,21 +180,35 @@ class Lexer:
         # Si lee "GET123", el lexema será "GET123", no existirá en el conjunto y lanzará Error.
         if lexema in metodos_validos:
             return Token(TokenType.TOKEN_METODO_HTTP, lexema, linea_inicio, col_inicio)
-        elif lexema.startswith("HTTP/"):
-            return Token(TokenType.TOKEN_PROTOCOLO, lexema, linea_inicio, col_inicio)
         else:
             return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
+    def _leer_protocolo(self) -> Token:
+        lexema = ""
+        linea_inicio, col_inicio = self.linea, self.columna
+        
+        while self.caracter_actual is not None and (self.caracter_actual.isalpha() or self.caracter_actual.isdigit() or self.caracter_actual in '/.'):
+            lexema += self.caracter_actual
+            self.avanzar()
+            
+        if lexema.startswith("HTTP/"):
+            version = lexema[5:]
+            # Exigencia geométrica estricta de RFC 9112: DIGIT "." DIGIT
+            if len(version) == 3 and version[0].isdigit() and version[1] == '.' and version[2].isdigit():
+                return Token(TokenType.TOKEN_PROTOCOLO, lexema, linea_inicio, col_inicio)
+                
+        return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
+    
     def _leer_ruta(self) -> Token:
         lexema = ""
         linea_inicio = self.linea
         col_inicio = self.columna
 
         # Conjunto estricto de caracteres válidos en una URI (RFC 3986)
-        # Incluye: alfanuméricos, unreserved (-._~), reserved (:/?#[]@!$&'()*+,;=) y percent (%)
+        # Incluye: alfanuméricos, unreserved (-._~), reserved (:/?[]@!$&'()*+,;=) y percent (%). Se excluye #.
         caracteres_validos_uri = set(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-            "-._~:/?#[]@!$&'()*+,;=%"
+            "-._~:/?[]@!$&'()*+,;=%"
         )
         hexadecimales = set("0123456789abcdefABCDEF")
         
@@ -342,20 +361,16 @@ class SemanticAnalyzer:
                 raise ValueError(f"Error Semántico (Ln {token.linea}): El octeto '{octeto}' de la IP '{token.lexema}' está fuera del límite (0-255).")
 
     def _validar_estado(self, token: Token):
-        estados_estandar = {
-            100, 101, 102, 103,
-            200, 201, 202, 203, 204, 205, 206, 207, 208, 226,
-            300, 301, 302, 303, 304, 305, 306, 307, 308,
-            400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451,
-            500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511
-        }
-        if int(token.lexema) not in estados_estandar:
-            raise ValueError(f"Error Semántico (Ln {token.linea}): Código HTTP '{token.lexema}' no estandarizado por IANA.")
+        codigo = int(token.lexema)
+        # RFC 9110: Los códigos de estado operan en clases de 1xx a 5xx.
+        # Se permiten códigos no registrados en IANA para soportar la extensibilidad del protocolo.
+        if not (100 <= codigo <= 599):
+            raise ValueError(f"Error Semántico (Ln {token.linea}): El código HTTP '{token.lexema}' está fuera del rango de clases válidas (100-599).")
 
     def _validar_ruta(self, token: Token):
-        # Única validación semántica: Límite físico para prevención de buffer overflow.
-        if len(token.lexema) > 2048:
-            raise ValueError(f"Error Semántico (Ln {token.linea}): La URI supera el límite físico de 2048 caracteres.")
+        # Validación semántica: Límite físico alineado a la directiva LimitRequestLine de Apache.
+        if len(token.lexema) > 8190:
+            raise ValueError(f"Error Semántico (Ln {token.linea}): El request-target supera el límite de 8190 caracteres soportado por el servidor.")
 
     def _validar_fecha(self, token: Token):
         lexema = token.lexema
@@ -422,7 +437,7 @@ class SemanticAnalyzer:
             raise ValueError(f"Error Semántico (Ln {linea}): Desplazamiento {signo_tz}{horas_tz:02d}{mins_tz:02d} fuera de los límites terrestres permitidos (-1200 a +1400).")
 
     def _validar_protocolo(self, token: Token):
-        protocolos_estandar = {"HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/2", "HTTP/3.0", "HTTP/3"}
+        protocolos_estandar = {"HTTP/1.0", "HTTP/1.1"}
         if token.lexema not in protocolos_estandar:
             raise ValueError(f"Error Semántico (Ln {token.linea}): Versión de protocolo '{token.lexema}' desconocida o no soportada.")
 
