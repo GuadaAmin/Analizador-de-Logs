@@ -6,7 +6,7 @@ class TokenType(Enum):
     TOKEN_FECHA = auto()
     TOKEN_METODO_HTTP = auto()
     TOKEN_RUTA = auto()
-    TOKEN_ESTADO = auto()
+    TOKEN_ENTERO = auto() # Estado y cantidad de bits
     TOKEN_PROTOCOLO = auto() 
     TOKEN_GUION = auto()     
     TOKEN_COMILLAS = auto()
@@ -74,9 +74,9 @@ class Lexer:
             if self.caracter_actual.isalpha():
                 return self._leer_metodo()
                 
-            # Bifurcación TOKEN_IP / ESTADO
+            # Bifurcación TOKEN_IP / ENTERO
             if self.caracter_actual.isdigit():
-                return self._leer_ip_o_estado()
+                return self._leer_ip_o_entero()
 
             # Transición directa estática: TOKEN_GUION
             if self.caracter_actual == '-':
@@ -97,7 +97,7 @@ class Lexer:
 
         return Token(TokenType.EOF, "", self.linea, self.columna)
 
-    def _leer_ip_o_estado(self) -> Token:
+    def _leer_ip_o_entero(self) -> Token:
         lexema = ""
         linea_inicio, col_inicio = self.linea, self.columna
         cantidad_puntos = 0
@@ -108,16 +108,12 @@ class Lexer:
             lexema += self.caracter_actual
             self.avanzar()
             
-        # Si el autómata se interrumpió por un carácter que no es espacio (ej: '/' en "14/")
         if self.caracter_actual is not None and not self.caracter_actual.isspace():
             lexema = self._consumir_hasta_espacio(lexema)
             return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
         if cantidad_puntos == 0:
-            if len(lexema) == 3:
-                return Token(TokenType.TOKEN_ESTADO, lexema, linea_inicio, col_inicio)
-            else:
-                return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
+            return Token(TokenType.TOKEN_ENTERO, lexema, linea_inicio, col_inicio)
         elif cantidad_puntos == 3:
             return Token(TokenType.TOKEN_IP, lexema, linea_inicio, col_inicio)
         else:
@@ -321,7 +317,17 @@ class Parser:
         # 9. Comillas de cierre de la petición
         tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_COMILLAS))
         # 10. Código de respuesta
-        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_ESTADO))
+        tokens_entry.append(self.consumir_y_retornar(TokenType.TOKEN_ENTERO))
+        # 11. Tamaño en bytes (Puede ser un número o un guion si no hay payload)
+        if self.token_actual.tipo == TokenType.ERROR:
+            raise ValueError(f"Error Léxico (Ln {self.token_actual.linea}, Col {self.token_actual.columna}): Símbolo o lexema inválido '{self.token_actual.lexema}'")
+            
+        if self.token_actual.tipo in (TokenType.TOKEN_ENTERO, TokenType.TOKEN_GUION):
+            token_tamano = self.token_actual
+            self.token_actual = self.lexer.obtener_siguiente_token()
+            tokens_entry.append(token_tamano)
+        else:
+            raise SyntaxError(f"Error Sintáctico (Ln {self.token_actual.linea}, Col {self.token_actual.columna}): Se esperaba TOKEN_ENTERO o TOKEN_GUION para el tamaño, pero se encontró {self.token_actual.tipo.name}.")
         
         return tokens_entry
 
@@ -341,13 +347,24 @@ class SemanticAnalyzer:
         token_protocolo = tokens[7]
         # tokens[7] es el protocolo, [8] son las comillas de cierre
         token_estado = tokens[9]
+        token_tamano = tokens[10]
         
         self._validar_ip(token_ip)
         self._validar_fecha(token_fecha)
         self._validar_ruta(token_ruta)
         self._validar_protocolo(token_protocolo)
         self._validar_estado(token_estado)
+        self._validar_tamano(token_tamano)
         # TOKEN_METODO_HTTP no requiere validación semántica adicional.
+
+    def _validar_tamano(self, token: Token):
+        if token.tipo == TokenType.TOKEN_GUION:
+            return # El guion indica ausencia de bytes (válido en CLF)
+            
+        bytes_enviados = int(token.lexema)
+        # Validación de integridad lógica: Un archivo no puede tener tamaño negativo
+        if bytes_enviados <= 0:
+            raise ValueError(f"Error Semántico (Ln {token.linea}): El tamaño de respuesta ({bytes_enviados} bytes) no puede ser negativo ni 0.")
 
     def _validar_ip(self, token: Token):
         octetos = token.lexema.split('.')
