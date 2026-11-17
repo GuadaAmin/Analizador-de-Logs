@@ -342,16 +342,17 @@ class SemanticAnalyzer:
         token_ip = tokens[0]
         # tokens[1] y [2] son los guiones de identidad
         token_fecha = tokens[3]
-        # tokens[4] son las comillas de apertura, [5] es el método HTTP
+        # tokens[4] son las comillas de apertura
+        token_metodo = tokens[5]
         token_ruta = tokens[6]
         token_protocolo = tokens[7]
-        # tokens[7] es el protocolo, [8] son las comillas de cierre
+        # tokens [8] son las comillas de cierre
         token_estado = tokens[9]
         token_tamano = tokens[10]
         
         self._validar_ip(token_ip)
         self._validar_fecha(token_fecha)
-        self._validar_ruta(token_ruta)
+        self._validar_linea_peticion(token_metodo, token_ruta, token_protocolo)
         self._validar_protocolo(token_protocolo)
         self._validar_estado(token_estado)
         self._validar_tamano(token_tamano)
@@ -384,10 +385,13 @@ class SemanticAnalyzer:
         if not (100 <= codigo <= 599):
             raise ValueError(f"Error Semántico (Ln {token.linea}): El código HTTP '{token.lexema}' está fuera del rango de clases válidas (100-599).")
 
-    def _validar_ruta(self, token: Token):
-        # Validación semántica: Límite físico alineado a la directiva LimitRequestLine de Apache.
-        if len(token.lexema) > 8190:
-            raise ValueError(f"Error Semántico (Ln {token.linea}): El request-target supera el límite de 8190 caracteres soportado por el servidor.")
+    def _validar_linea_peticion(self, token_metodo: Token, token_ruta: Token, token_protocolo: Token):
+        # Reconstrucción métrica de la Request-Line: Método + espacio + Ruta + espacio + Protocolo
+        longitud_total = len(token_metodo.lexema) + 1 + len(token_ruta.lexema) + 1 + len(token_protocolo.lexema)
+        
+        # Validación física contra el buffer LimitRequestLine de Apache
+        if longitud_total > 8190:
+            raise ValueError(f"Error Semántico (Ln {token_ruta.linea}): La Request-Line reconstruida ({longitud_total} bytes) supera la directiva LimitRequestLine (8190 bytes).")
 
     def _validar_fecha(self, token: Token):
         lexema = token.lexema
