@@ -49,16 +49,21 @@ export function trazar(lexema, siguiente = '') {
   else if (c0 === '"') rama = 'comillas';
   else rama = 'err';
 
-  let puntos = 0, hexPend = 0, prefijo = '';
+  let puntos = 0, digitosBloque = 0, hexPend = 0, prefijo = '';
   for (let i = 0; i < lexema.length; i++) {
     const c = lexema[i];
     if (nodo === 'err') { mover(c, 'q_err', 'err', 'err-err'); continue; }
 
     switch (rama) {
       case 'num':
-        if (esDigito(c)) mover(c, `q_num_${puntos}`, `num${puntos}`, i === 0 ? 'q0-num0' : `num${puntos}-num${puntos}`);
-        else if (c === '.' && puntos < 3) { puntos++; mover(c, `q_num_${puntos}`, `num${puntos}`, `num${puntos - 1}-num${puntos}`); }
-        else aError(c);
+        // Un octeto de IP admite de 1 a 3 dígitos (sub-máquina O = D ∪ D² ∪ D³).
+        if (esDigito(c) && (puntos === 0 || digitosBloque < 3)) {
+          digitosBloque++;
+          mover(c, `q_num_${puntos}`, `num${puntos}`, i === 0 ? 'q0-num0' : `num${puntos}-num${puntos}`);
+        } else if (c === '.' && puntos < 3 && digitosBloque >= 1 && digitosBloque <= 3) {
+          puntos++; digitosBloque = 0;
+          mover(c, `q_num_${puntos}`, `num${puntos}`, `num${puntos - 1}-num${puntos}`);
+        } else aError(c);
         break;
       case 'uri':
         if (i === 0) mover(c, 'q_uri', 'uri', 'q0-uri');
@@ -108,7 +113,8 @@ export function trazar(lexema, siguiente = '') {
     }
   }
 
-  const tipo = ACEPTACION[nodo] ?? null;
+  // El último octeto de una IP no puede quedar vacío (p. ej. '192.168.1.').
+  const tipo = nodo === 'num3' && digitosBloque === 0 ? null : (ACEPTACION[nodo] ?? null);
   const acepta = tipo !== null;
   pasos.push({ de: estado, sim: '⊔', a: acepta ? 'q0' : 'q_err', nodo: acepta ? nodo : 'err', deNodo: nodo, arista: null, fin: true, acepta, tipo });
   return { rama, pasos, acepta, tipo };
