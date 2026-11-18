@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analizador CLF</title>
+  <meta name="description" content="Analizador léxico, sintáctico y semántico de logs Apache en Common Log Format — Compiladores y Trasladores 2026, UNSTA.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b7cfa'/%3E%3Ccircle cx='10' cy='16' r='4' fill='none' stroke='white' stroke-width='2.4'/%3E%3Ccircle cx='23' cy='16' r='4' fill='none' stroke='white' stroke-width='2.4'/%3E%3Ccircle cx='23' cy='16' r='1.6' fill='white'/%3E%3Cpath d='M14 16h5' stroke='white' stroke-width='2.4'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/estilos.css">
+  <script>
+    try {
+      const t = new URLSearchParams(location.search).get('tema') || localStorage.getItem('clf-tema');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div class="app">
+    <!-- ===================== CABECERA ===================== -->
+    <header class="cabecera">
+      <div class="marca">
+        <svg class="marca-logo" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" class="marca-fondo"/>
+          <circle cx="10" cy="16" r="4" fill="none" stroke="#fff" stroke-width="2.4"/>
+          <circle cx="23" cy="16" r="4" fill="none" stroke="#fff" stroke-width="2.4"/>
+          <circle cx="23" cy="16" r="1.6" fill="#fff"/>
+          <path d="M14 16h5" stroke="#fff" stroke-width="2.4"/>
+        </svg>
+        <div>
+          <h1>Analizador CLF</h1>
+          <p>Léxico · Sintáctico · Semántico — Apache Common Log Format</p>
+        </div>
+      </div>
+
+      <div class="cabecera-acciones">
+        <span class="conexion" id="conexion" title="Estado del servidor Python">
+          <span class="punto"></span><span class="conexion-texto">Conectando…</span>
+        </span>
+        <button class="btn-icono" id="btn-atajos" title="Atajos de teclado (?)" aria-label="Atajos de teclado">
+          <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
+        </button>
+        <button class="btn-icono" id="btn-tema" title="Cambiar tema" aria-label="Cambiar tema">
+          <svg class="ico-sol" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <svg class="ico-luna" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        </button>
+        <button class="btn btn-sutil" id="btn-acerca">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          Acerca del trabajo
+        </button>
+      </div>
+    </header>
+
+    <!-- ===================== PIPELINE ===================== -->
+    <section class="pipeline" aria-label="Estado de las fases del compilador">
+      <div class="fase" data-fase="lexico">
+        <div class="fase-icono">1</div>
+        <div class="fase-info">
+          <span class="fase-nombre">Análisis léxico</span>
+          <span class="fase-detalle" id="det-lexico">AFD · tokens</span>
+        </div>
+      </div>
+      <svg class="fase-flecha" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      <div class="fase" data-fase="sintactico">
+        <div class="fase-icono">2</div>
+        <div class="fase-info">
+          <span class="fase-nombre">Análisis sintáctico</span>
+          <span class="fase-detalle" id="det-sintactico">GLC · descendente recursivo</span>
+        </div>
+      </div>
+      <svg class="fase-flecha" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      <div class="fase" data-fase="semantico">
+        <div class="fase-icono">3</div>
+        <div class="fase-info">
+          <span class="fase-nombre">Análisis semántico</span>
+          <span class="fase-detalle" id="det-semantico">reglas del dominio</span>
+        </div>
+      </div>
+      <div class="veredicto" id="veredicto">
+        <span class="veredicto-icono"></span>
+        <div class="veredicto-texto">
+          <strong>Sin analizar</strong>
+          <span>Escriba o cargue un log para comenzar.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== ÁREA PRINCIPAL ===================== -->
+    <main class="principal" id="principal">
+      <!-- Editor -->
+      <section class="panel panel-editor" aria-label="Editor de logs">
+        <div class="panel-barra">
+          <div class="panel-titulo">
+            <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
+            <span id="nombre-archivo">LogFile.txt</span>
+            <span class="modificado" id="modificado" hidden>●</span>
+          </div>
+          <div class="barra-herramientas">
+            <div class="menu-desplegable">
+              <button class="btn btn-sutil" id="btn-ejemplos" aria-haspopup="true">
+                <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+                Ejemplos
+                <svg class="chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="menu" id="menu-ejemplos" role="menu"></div>
+            </div>
+            <button class="btn btn-sutil" id="btn-abrir" title="Abrir archivo (Ctrl+O)">
+              <svg viewBox="0 0 24 24"><path d="M4 20h16M12 4v12M7 11l5 5 5-5"/></svg>
+              Abrir
+            </button>
+            <input type="file" id="input-archivo" accept=".txt,.log,text/plain" hidden>
+            <button class="btn-icono" id="btn-limpiar" title="Limpiar editor" aria-label="Limpiar editor">
+              <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+            </button>
+            <label class="interruptor" title="Analizar automáticamente mientras escribe">
+              <input type="checkbox" id="chk-vivo" checked>
+              <span class="interruptor-pista"></span>
+              <span>En vivo</span>
+            </label>
+            <button class="btn btn-primario" id="btn-compilar" title="Compilar (Ctrl+Enter)">
+              <svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>
+              Compilar
+            </button>
+          </div>
+        </div>
+
+        <div class="editor" id="editor">
+          <div class="editor-gutter" id="gutter" aria-hidden="true"></div>
+          <div class="editor-cuerpo">
+            <pre class="editor-resaltado" id="resaltado" aria-hidden="true"></pre>
+            <textarea id="entrada" class="editor-entrada" spellcheck="false" autocomplete="off" autocapitalize="off"
+              wrap="off" aria-label="Contenido del archivo de log" placeholder="Pegue aquí líneas de log en formato CLF, arrastre un archivo .log/.txt o elija un ejemplo…"></textarea>
+          </div>
+          <div class="zona-soltar" id="zona-soltar">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+            <span>Soltá el archivo para analizarlo</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="divisor" id="divisor" role="separator" aria-orientation="vertical" tabindex="0" title="Arrastrar para redimensionar"></div>
+
+      <!-- Inspector -->
+      <section class="panel panel-inspector" aria-label="Resultados del análisis">
+        <nav class="pestanas" role="tablist" id="pestanas">
+          <button role="tab" data-tab="diagnostico" class="activa">Diagnóstico <span class="contador" id="cnt-diag">0</span></button>
+          <button role="tab" data-tab="tokens">Tokens <span class="contador" id="cnt-tokens">0</span></button>
+          <button role="tab" data-tab="arbol">Árbol sintáctico</button>
+          <button role="tab" data-tab="semantica">Semántica</button>
+          <button role="tab" data-tab="automata">Autómata</button>
+          <button role="tab" data-tab="analitica">Analítica</button>
+          <button role="tab" data-tab="pruebas">Pruebas</button>
+          <button role="tab" data-tab="especificacion">Especificación</button>
+        </nav>
+        <div class="vistas">
+          <div class="vista activa" data-vista="diagnostico" id="vista-diagnostico"></div>
+          <div class="vista" data-vista="tokens" id="vista-tokens"></div>
+          <div class="vista" data-vista="arbol" id="vista-arbol"></div>
+          <div class="vista" data-vista="semantica" id="vista-semantica"></div>
+          <div class="vista" data-vista="automata" id="vista-automata"></div>
+          <div class="vista" data-vista="analitica" id="vista-analitica"></div>
+          <div class="vista" data-vista="pruebas" id="vista-pruebas"></div>
+          <div class="vista" data-vista="especificacion" id="vista-especificacion"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===================== BARRA DE ESTADO ===================== -->
+    <footer class="barra-estado">
+      <span id="est-cursor">Ln 1, Col 1</span>
+      <span id="est-lineas">0 líneas</span>
+      <span id="est-tokens">0 tokens</span>
+      <span class="separador"></span>
+      <span id="est-tiempo">—</span>
+      <span>UTF-8</span>
+      <span>CLF · Apache</span>
+      <div class="menu-desplegable arriba">
+        <button class="btn-estado" id="btn-exportar">
+          <svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>
+          Exportar reporte
+        </button>
+        <div class="menu" id="menu-exportar" role="menu">
+          <button data-exportar="json">Reporte completo (.json)</button>
+          <button data-exportar="csv">Diagnóstico por línea (.csv)</button>
+          <button data-exportar="tokens">Flujo de tokens (.csv)</button>
+          <button data-exportar="log">Solo registros válidos (.log)</button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ===================== MODALES ===================== -->
+  <dialog class="modal" id="modal-acerca">
+    <form method="dialog" class="modal-cerrar"><button class="btn-icono" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></form>
+    <div class="acerca-cabecera">
+      <span class="sello">UNSTA · Facultad de Ingeniería</span>
+      <h2>Analizador Léxico, Sintáctico y Semántico de Logs de Servidores</h2>
+      <p>Trabajo Final — Compiladores y Trasladores 2026</p>
+    </div>
+    <div class="acerca-grilla">
+      <div>
+        <h3>Grupo</h3>
+        <ul class="integrantes">
+          <li><span class="avatar">GA</span><div><strong>Amin, Guadalupe</strong><small>UI181412</small></div></li>
+          <li><span class="avatar">CL</span><div><strong>Lopez Ávila, Candelaria</strong><small>UI181472</small></div></li>
+          <li><span class="avatar">AR</span><div><strong>Ruiz, Amparo</strong><small>UI181477</small></div></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Arquitectura</h3>
+        <ol class="arquitectura">
+          <li><strong>Lexer</strong> — AFD implementado a mano, sin expresiones regulares, con sub-autómatas por token y percent-encoding RFC 3986.</li>
+          <li><strong>Parser</strong> — descendente recursivo sobre la GLC <code>&lt;LogFile&gt; ::= &lt;LogEntry&gt; &lt;LogFile&gt; | ε</code>.</li>
+          <li><strong>Semántico</strong> — IPv4, calendario y husos horarios, RFC 9110, versiones HTTP, LimitRequestLine y tamaño %b.</li>
+        </ol>
+        <p class="nota">Esta interfaz no reimplementa el compilador: cada análisis ejecuta <code>compilador.py</code> en el servidor Python local.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal modal-chico" id="modal-atajos">
+    <form method="dialog" class="modal-cerrar"><button class="btn-icono" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></form>
+    <h2>Atajos de teclado</h2>
+    <dl class="atajos">
+      <dt><kbd>Ctrl</kbd> + <kbd>Enter</kbd></dt><dd>Compilar</dd>
+      <dt><kbd>Ctrl</kbd> + <kbd>O</kbd></dt><dd>Abrir archivo</dd>
+      <dt><kbd>Ctrl</kbd> + <kbd>S</kbd></dt><dd>Exportar reporte JSON</dd>
+      <dt><kbd>Alt</kbd> + <kbd>1</kbd>…<kbd>8</kbd></dt><dd>Cambiar de pestaña</dd>
+      <dt><kbd>F8</kbd> / <kbd>Shift</kbd>+<kbd>F8</kbd></dt><dd>Siguiente / anterior error</dd>
+      <dt><kbd>?</kbd></dt><dd>Mostrar esta ayuda</dd>
+    </dl>
+  </dialog>
+
+  <div class="tooltip" id="tooltip" role="tooltip"></div>
+  <div class="avisos" id="avisos" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
