@@ -13,6 +13,25 @@ class TokenType(Enum):
     EOF = auto()      # Fin de archivo
     ERROR = auto()    # Símbolo no reconocido
 
+# Clasificadores de caracteres restringidos al alfabeto Σ (ASCII).
+# Se evitan str.isdigit()/isalpha()/isspace() porque aceptan Unicode
+# (por ejemplo '²', 'é' o espacios no ASCII), que no pertenecen a Σ.
+def es_digito(c: str) -> bool:
+    return '0' <= c <= '9'
+
+def es_mayuscula(c: str) -> bool:
+    return 'A' <= c <= 'Z'
+
+def es_minuscula(c: str) -> bool:
+    return 'a' <= c <= 'z'
+
+def es_letra(c: str) -> bool:
+    return es_mayuscula(c) or es_minuscula(c)
+
+def es_espacio(c: str) -> bool:
+    """Σ_espacio = {' ', \\t, \\n, \\r}"""
+    return c in (' ', '\t', '\n', '\r')
+
 @dataclass
 class Token:
     tipo: TokenType
@@ -48,13 +67,13 @@ class Lexer:
 
     def _saltar_delimitadores(self):
         """Implementa la transición δ(q0, c ∈ Σ_espacio) = q0"""
-        while self.caracter_actual is not None and self.caracter_actual.isspace():
+        while self.caracter_actual is not None and es_espacio(self.caracter_actual):
             self.avanzar()
 
     def obtener_siguiente_token(self) -> Token:
         while self.caracter_actual is not None:
             # Estado q0: Descarte de delimitadores (incluye espacios y saltos de línea \n)
-            if self.caracter_actual.isspace():
+            if es_espacio(self.caracter_actual):
                 self._saltar_delimitadores()
                 continue
                 
@@ -71,11 +90,11 @@ class Lexer:
                 return self._leer_protocolo()
                 
             # Bifurcación TOKEN_METODO_HTTP
-            if self.caracter_actual.isalpha():
+            if es_letra(self.caracter_actual):
                 return self._leer_metodo()
                 
             # Bifurcación TOKEN_IP / ENTERO
-            if self.caracter_actual.isdigit():
+            if es_digito(self.caracter_actual):
                 return self._leer_ip_o_entero()
 
             # Transición directa estática: TOKEN_GUION
@@ -102,20 +121,24 @@ class Lexer:
         linea_inicio, col_inicio = self.linea, self.columna
         cantidad_puntos = 0
         
-        while self.caracter_actual is not None and (self.caracter_actual.isdigit() or self.caracter_actual == '.'):
+        while self.caracter_actual is not None and (es_digito(self.caracter_actual) or self.caracter_actual == '.'):
             if self.caracter_actual == '.':
                 cantidad_puntos += 1
             lexema += self.caracter_actual
             self.avanzar()
             
-        if self.caracter_actual is not None and not self.caracter_actual.isspace():
+        if self.caracter_actual is not None and not es_espacio(self.caracter_actual):
             lexema = self._consumir_hasta_espacio(lexema)
             return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
         if cantidad_puntos == 0:
             return Token(TokenType.TOKEN_ENTERO, lexema, linea_inicio, col_inicio)
         elif cantidad_puntos == 3:
-            return Token(TokenType.TOKEN_IP, lexema, linea_inicio, col_inicio)
+            # Sub-máquina Octeto O = D ∪ D² ∪ D³: cada bloque debe tener entre 1 y 3 dígitos
+            # (rechaza bloques vacíos como en '1..2.3' o '192.168.1.').
+            if all(1 <= len(octeto) <= 3 for octeto in lexema.split('.')):
+                return Token(TokenType.TOKEN_IP, lexema, linea_inicio, col_inicio)
+            return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
         else:
             return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
 
@@ -124,8 +147,10 @@ class Lexer:
         linea_inicio = self.linea
         col_inicio = self.columna
         
-        # El AFD transita leyendo todo hasta encontrar el cierre ']' o el fin de archivo
-        while self.caracter_actual is not None and self.caracter_actual != ']':
+        # El AFD transita leyendo hasta encontrar el cierre ']', el fin de línea o el fin de archivo.
+        # Cortar en el salto de línea evita que una fecha sin ']' absorba los registros siguientes.
+        while (self.caracter_actual is not None and self.caracter_actual != ']'
+               and self.caracter_actual not in ('\n', '\r')):
             lexema += self.caracter_actual
             self.avanzar()
             
@@ -149,10 +174,10 @@ class Lexer:
                 mes = lexema[4:7]
                 
                 # 3. Verificar que los tipos de caracteres coincidan (\d y [A-Z][a-z]{2})
-                if (bloque_digitos.isdigit() and 
-                    mes.isalpha() and 
-                    mes[0].isupper() and 
-                    mes[1:].islower()):
+                if (all(es_digito(c) for c in bloque_digitos) and
+                    es_mayuscula(mes[0]) and
+                    es_minuscula(mes[1]) and
+                    es_minuscula(mes[2])):
                     
                     # Léxicamente válido. Los chequeos lógicos (ej. mes válido, horas reales) 
                     # ocurrirán en el Analizador Semántico.
@@ -167,7 +192,7 @@ class Lexer:
         col_inicio = self.columna
         
         # El AFD transita leyendo todo el bloque hasta chocar con un espacio (delimitador natural) o comillas
-        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
+        while self.caracter_actual is not None and not es_espacio(self.caracter_actual) and self.caracter_actual != '"':
             lexema += self.caracter_actual
             self.avanzar()
             
@@ -183,14 +208,14 @@ class Lexer:
         lexema = ""
         linea_inicio, col_inicio = self.linea, self.columna
         
-        while self.caracter_actual is not None and (self.caracter_actual.isalpha() or self.caracter_actual.isdigit() or self.caracter_actual in '/.'):
+        while self.caracter_actual is not None and (es_letra(self.caracter_actual) or es_digito(self.caracter_actual) or self.caracter_actual in '/.'):
             lexema += self.caracter_actual
             self.avanzar()
             
         if lexema.startswith("HTTP/"):
             version = lexema[5:]
             # Exigencia geométrica estricta de RFC 9112: DIGIT "." DIGIT
-            if len(version) == 3 and version[0].isdigit() and version[1] == '.' and version[2].isdigit():
+            if len(version) == 3 and es_digito(version[0]) and version[1] == '.' and es_digito(version[2]):
                 return Token(TokenType.TOKEN_PROTOCOLO, lexema, linea_inicio, col_inicio)
                 
         return Token(TokenType.ERROR, lexema, linea_inicio, col_inicio)
@@ -208,7 +233,7 @@ class Lexer:
         )
         hexadecimales = set("0123456789abcdefABCDEF")
         
-        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
+        while self.caracter_actual is not None and not es_espacio(self.caracter_actual) and self.caracter_actual != '"':
             
             # Sub-autómata para Percent-Encoding (% seguido de 2 hex)
             if self.caracter_actual == '%':
@@ -239,14 +264,14 @@ class Lexer:
 
     def _consumir_ruta_error(self, lexema_parcial: str, linea_inicio: int, col_inicio: int) -> Token:
         """Sumidero: consume el resto de la URI corrupta para emitir el error completo."""
-        while self.caracter_actual is not None and not self.caracter_actual.isspace() and self.caracter_actual != '"':
+        while self.caracter_actual is not None and not es_espacio(self.caracter_actual) and self.caracter_actual != '"':
             lexema_parcial += self.caracter_actual
             self.avanzar()
         return Token(TokenType.ERROR, lexema_parcial, linea_inicio, col_inicio)
     
     def _consumir_hasta_espacio(self, lexema_parcial: str) -> str:
         """Consume y anexa caracteres hasta encontrar el delimitador de espacio o EOF."""
-        while self.caracter_actual is not None and not self.caracter_actual.isspace():
+        while self.caracter_actual is not None and not es_espacio(self.caracter_actual):
             lexema_parcial += self.caracter_actual
             self.avanzar()
         return lexema_parcial

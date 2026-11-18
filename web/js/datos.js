@@ -214,6 +214,11 @@ export const PRUEBAS = [
   { cat: 'Léxicos', desc: 'Fragmento # excluido de la ruta', esp: 'lexico', texto: lineaCLF({ ruta: '/a#b' }) },
   { cat: 'Léxicos', desc: 'Mes en minúsculas ([A-Z][a-z]{2})', esp: 'lexico', texto: lineaCLF({ fecha: '[14/oct/2026:13:45:01 -0300]' }) },
   { cat: 'Léxicos', desc: 'Protocolo sin punto (HTTP/11)', esp: 'lexico', texto: lineaCLF({ proto: 'HTTP/11' }) },
+  { cat: 'Léxicos', desc: 'IP con octeto vacío (1..2.3)', esp: 'lexico', texto: lineaCLF({ ip: '1..2.3' }) },
+  { cat: 'Léxicos', desc: 'IP con octeto de 4 dígitos (O = D ∪ D² ∪ D³)', esp: 'lexico', texto: lineaCLF({ ip: '1234.1.1.1' }) },
+  { cat: 'Léxicos', desc: 'Dígito Unicode fuera de Σ (²)', esp: 'lexico', texto: lineaCLF({ bytes: '²' }) },
+  { cat: 'Léxicos', desc: 'Letra no ASCII en el método (GÉT)', esp: 'lexico', texto: lineaCLF({ metodo: 'GÉT' }) },
+  { cat: 'Léxicos', desc: "Fecha sin ']' no absorbe la línea siguiente", esp: 'lexico', texto: '192.168.1.1 - - [14/Oct/2026:13:45:01 -0300 "GET / HTTP/1.1" 200 5\n' + lineaCLF() },
 
   { cat: 'Sintácticos', desc: 'Caso 2 del informe: falta un guion', esp: 'sintactico', texto: '192.168.1.1 - [14/Oct/2026:13:45:01 -0300] "GET /index.html HTTP/1.1" 200 -' },
   { cat: 'Sintácticos', desc: 'Falta comilla de cierre', esp: 'sintactico', texto: '192.168.1.1 - - [14/Oct/2026:13:45:01 -0300] "GET /index.html HTTP/1.1 200 512' },
